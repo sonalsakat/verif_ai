@@ -1,7 +1,7 @@
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { getSupabaseAdmin, type AppUser, DEMO_OFFICER_ID, DEMO_ADMIN_ID, DEMO_ORG_ID } from "./supabase";
 
@@ -160,8 +160,21 @@ export async function ensureSchema(): Promise<void> {
     schemaReady = (async () => {
       if (hasLivePostgres() && !isUsingEmbeddedDb) {
         try {
-          const schemaPath = fileURLToPath(new URL("./schema.sql", import.meta.url));
-          const sql = await readFile(path.resolve(schemaPath), "utf8");
+          const schemaPaths = [
+            path.resolve(fileURLToPath(new URL("./schema.sql", import.meta.url))),
+            path.resolve(process.cwd(), "server", "schema.sql"),
+            path.resolve(process.cwd(), "dist", "schema.sql"),
+          ];
+          let sql = "";
+          for (const schemaPath of schemaPaths) {
+            try {
+              sql = await readFile(schemaPath, "utf8");
+              break;
+            } catch {
+              // Try the source-tree and bundled deployment locations in turn.
+            }
+          }
+          if (!sql) throw new Error("Could not locate server/schema.sql or dist/schema.sql");
           await query(sql);
           return;
         } catch (error) {
@@ -467,7 +480,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 1. SELECT from tenders
-  if (normalized.includes("from public.tenders")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.tenders")) {
     const orgId = values[0] ? String(values[0]) : DEMO_ORG_ID;
     const tenders = db.tenders.filter((t) => !orgId || t.organization_id === orgId);
     const rows = tenders.map((t) => {
@@ -499,7 +512,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 2. SELECT from bidders
-  if (normalized.includes("from public.bidders")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.bidders")) {
     const orgId = values[0] ? String(values[0]) : DEMO_ORG_ID;
     const bidders = db.bidders.filter((b) => !orgId || b.organization_id === orgId);
     const rows = bidders.map((b) => {
@@ -527,7 +540,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 3. SELECT from tender_requirements
-  if (normalized.includes("from public.tender_requirements")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.tender_requirements")) {
     const rows = db.tender_requirements.map((r) => ({
       id: r.id,
       tenderId: r.tender_id,
@@ -542,7 +555,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 4. SELECT from documents
-  if (normalized.includes("from public.documents")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.documents")) {
     if (normalized.includes("where id = $1")) {
       const docId = values[0];
       const match = db.documents.find((d) => d.id === docId);
@@ -570,7 +583,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 5. SELECT from compliance_checks
-  if (normalized.includes("from public.compliance_checks")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.compliance_checks")) {
     const rows = db.compliance_checks.map((cc) => {
       const tender = db.tenders.find((t) => t.id === cc.tender_id);
       const bidder = db.bidders.find((b) => b.id === cc.bidder_id);
@@ -585,8 +598,8 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
         requirementId: cc.requirement_id,
         requirement: cc.requirement,
         evidence: cc.evidence,
-        source: cc.source,
-        isDemo: Boolean(cc.is_demo ?? true),
+        source: ev?.source || cc.source,
+        isDemo: Boolean(cc.is_demo ?? (String(tender?.external_id ?? "").startsWith("DEMO-") || String(bidder?.registration_id ?? "").startsWith("DEMO-"))),
         result: cc.result,
         confidence: cc.confidence,
         detail: cc.detail,
@@ -609,7 +622,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 6. SELECT from evidence
-  if (normalized.includes("from public.evidence")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.evidence")) {
     const rows = db.evidence.map((e) => ({
       id: e.id,
       checkId: e.check_id,
@@ -627,7 +640,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 7. SELECT from audit_events
-  if (normalized.includes("from public.audit_events")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.audit_events")) {
     const rows = db.audit_events.map((ae) => {
       const profile = db.profiles.find((p) => p.id === ae.user_id);
       const member = db.organization_members.find((m) => m.user_id === ae.user_id);
@@ -651,7 +664,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 8. SELECT from officer_decisions
-  if (normalized.includes("from public.officer_decisions")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.officer_decisions")) {
     const rows = db.officer_decisions.map((od) => {
       const profile = db.profiles.find((p) => p.id === od.officer_id);
       return {
@@ -668,7 +681,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 9. SELECT from government_sources
-  if (normalized.includes("from public.government_sources")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.government_sources")) {
     const rows = db.government_sources.map((s) => ({
       id: s.id,
       name: s.name,
@@ -682,7 +695,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 10. SELECT from compliance_rules
-  if (normalized.includes("from public.compliance_rules")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.compliance_rules")) {
     const rows = db.compliance_rules.map((r) => ({
       id: r.id,
       name: r.name,
@@ -696,7 +709,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 11. SELECT from system_settings
-  if (normalized.includes("from public.system_settings")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.system_settings")) {
     const rows = db.system_settings.map((s) => ({
       key: s.setting_key,
       value: s.setting_value,
@@ -706,7 +719,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   }
 
   // 12. SELECT from organization_members
-  if (normalized.includes("from public.organization_members")) {
+  if (normalized.startsWith("select") && normalized.includes("from public.organization_members")) {
     if (normalized.includes("count(*)")) {
       const count = db.organization_members.length;
       return { rows: [{ count }] as unknown as T[], command: "SELECT", rowCount: 1, oid: 0, fields: [] };
@@ -729,7 +742,8 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 13. INSERT into tenders
   if (normalized.includes("insert into public.tenders")) {
-    const id = `tender-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = randomUUID();
+    const hasSeedState = values.length >= 10;
     const tender = {
       id,
       organization_id: values[0] || DEMO_ORG_ID,
@@ -741,8 +755,8 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
       bid_opening_date: values[6] || null,
       estimated_value: values[7] || "0",
       status: "Under Verification",
-      progress: 0,
-      created_by: values[8] || DEMO_OFFICER_ID,
+      progress: hasSeedState ? Number(values[8] || 0) : 0,
+      created_by: (hasSeedState ? values[9] : values[8]) || DEMO_OFFICER_ID,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -769,7 +783,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 14. INSERT into bidders
   if (normalized.includes("insert into public.bidders")) {
-    const id = `bidder-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = randomUUID();
     const bidder = {
       id,
       organization_id: values[0] || DEMO_ORG_ID,
@@ -777,10 +791,10 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
       registration_id: values[2],
       gstin: values[3] || null,
       pan: values[4] || null,
-      status: "Pending",
-      compliance_score: 0,
-      risk: "Low",
-      last_checked: null,
+      status: values[5] || "Pending",
+      compliance_score: Number(values[6] || 0),
+      risk: values[7] || "Low",
+      last_checked: values[8] || null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -805,14 +819,14 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 15. INSERT into tender_requirements
   if (normalized.includes("insert into public.tender_requirements")) {
-    const id = `req-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = randomUUID();
     const req = {
       id,
       tender_id: values[0],
       title: values[1],
       category: values[2],
       evidence_required: values[3],
-      source: "Officer added",
+      source: normalized.includes("'active'") ? values[4] || "Officer added" : "Officer added",
       status: "Active",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -840,11 +854,11 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
     const tenderId = values[0];
     const bidderId = values[1];
     db.bids.push({
-      id: `bid-${Date.now()}`,
+      id: randomUUID(),
       tender_id: tenderId,
       bidder_id: bidderId,
       submitted_at: new Date().toISOString(),
-      status: "Under Verification",
+      status: normalized.includes("values ($1, $2, $3)") ? values[2] || "Under Verification" : "Under Verification",
       created_at: new Date().toISOString(),
     });
     return { rows: [] as T[], command: "INSERT", rowCount: 1, oid: 0, fields: [] };
@@ -852,7 +866,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 17. INSERT into compliance_checks
   if (normalized.includes("insert into public.compliance_checks")) {
-    const id = `check-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = randomUUID();
     const check = {
       id,
       organization_id: values[0] || DEMO_ORG_ID,
@@ -890,7 +904,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 18. INSERT into evidence
   if (normalized.includes("insert into public.evidence")) {
-    const id = `ev-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = randomUUID();
     const ev = {
       id,
       check_id: values[0],
@@ -911,7 +925,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 19. INSERT into officer_decisions
   if (normalized.includes("insert into public.officer_decisions")) {
-    const id = `decision-${Date.now()}`;
+    const id = randomUUID();
     const dec = {
       id,
       organization_id: values[0] || DEMO_ORG_ID,
@@ -939,7 +953,16 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 20. INSERT into documents
   if (normalized.includes("insert into public.documents")) {
-    const id = `doc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = randomUUID();
+    const isDetailedSeed = normalized.includes("document_type") && normalized.includes("extracted_text") && normalized.includes("extraction");
+    let extraction: Record<string, unknown> = {};
+    if (isDetailedSeed) {
+      try {
+        extraction = typeof values[8] === "string" ? JSON.parse(values[8] || "{}") : (values[8] as Record<string, unknown> || {});
+      } catch {
+        extraction = {};
+      }
+    }
     const doc = {
       id,
       organization_id: values[0] || DEMO_ORG_ID,
@@ -947,12 +970,14 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
       bidder_id: values[2] || null,
       file_key: values[3],
       file_name: values[4],
-      mime_type: values[5],
-      size_bytes: values[6],
-      processing_status: values[7] || "Processed",
+      mime_type: isDetailedSeed ? "application/pdf" : values[5],
+      size_bytes: isDetailedSeed ? values[5] : values[6],
+      processing_status: isDetailedSeed ? "Processed" : normalized.includes("'processing'") ? "Processing" : values[7] || "Processed",
       verification_status: "Verified",
-      document_type: "PDF Document",
-      uploaded_by: values[8] || DEMO_OFFICER_ID,
+      document_type: isDetailedSeed ? values[6] : "PDF Document",
+      extracted_text: isDetailedSeed ? values[7] : null,
+      extraction,
+      uploaded_by: (isDetailedSeed ? values[9] : values.length >= 9 ? values[8] : values[7]) || DEMO_OFFICER_ID,
       uploaded_at: new Date().toISOString(),
       processed_at: new Date().toISOString(),
     };
@@ -974,7 +999,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 21. INSERT into audit_events
   if (normalized.includes("insert into public.audit_events")) {
-    const id = `audit-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = randomUUID();
     const event = {
       id,
       organization_id: values[0] || DEMO_ORG_ID,
@@ -991,7 +1016,7 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
 
   // 22. INSERT into compliance_rules
   if (normalized.includes("insert into public.compliance_rules")) {
-    const id = `rule-${Date.now()}`;
+    const id = randomUUID();
     const rule = {
       id,
       organization_id: values[0] || DEMO_ORG_ID,
@@ -1051,15 +1076,17 @@ function executeEmbeddedQuery<T extends QueryResultRow>(
   // 24. UPDATE bidders
   if (normalized.includes("update public.bidders")) {
     const bidderId = values[1];
-    const bidder = db.bidders.find((b) => b.id === bidderId);
-    if (bidder) {
+      const bidder = db.bidders.find((b) => b.id === bidderId);
+      if (bidder) {
       if (normalized.includes("status = case when $1 = 'qualified'")) {
         const dec = String(values[0]);
         bidder.status = dec === "Qualified" ? "Verified" : dec === "Not Qualified" ? "Non-Compliant" : "Needs Review";
       } else {
         const checks = db.compliance_checks.filter((cc) => cc.bidder_id === bidderId);
-        const hasPending = checks.some((cc) => cc.result === "Pending");
-        bidder.status = hasPending ? "Needs Review" : "Verified";
+        const hasNonCompliant = checks.some((cc) => cc.result === "Non-Compliant");
+        const hasReview = checks.some((cc) => cc.result === "Needs Review");
+        const hasPending = checks.some((cc) => cc.result === "Pending" || cc.result === "Pending Verification");
+        bidder.status = hasNonCompliant ? "Non-Compliant" : hasReview ? "Needs Review" : hasPending ? "Pending Verification" : "Verified";
         const sum = checks.reduce((acc, cc) => acc + (cc.result === "Verified" ? 100 : cc.result === "Needs Review" ? 60 : 0), 0);
         bidder.compliance_score = checks.length > 0 ? Math.round(sum / checks.length) : 0;
       }

@@ -111,6 +111,7 @@ function AuthScreen({ onLogin, onRegister, onReset, onDemoLogin, busy }: { onLog
 }
 
 function StatusBadge({ status }: { status: string }) { const lower = status.toLowerCase(); const tone = lower.includes("verified") || lower.includes("qualified") || lower.includes("connected") || lower.includes("completed") || lower === "processed" ? "status-green" : lower.includes("review") || lower.includes("processing") ? "status-orange" : lower.includes("non") || lower.includes("failed") ? "status-red" : "status-gray"; return <span className={`status-badge ${tone}`}><i />{status}</span>; }
+function isPendingStatus(value: unknown) { return String(value ?? "").toLowerCase().includes("pending"); }
 function EmptyState({ icon: Icon, title, copy, action }: { icon: typeof FileText; title: string; copy: string; action?: React.ReactNode }) { return <div className="empty-state"><Icon size={24} /><strong>{title}</strong><span>{copy}</span>{action}</div>; }
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) { return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal-card" role="dialog" aria-modal="true"><div className="modal-header"><div><h2>{title}</h2></div><button className="icon-button subtle" onClick={onClose} aria-label="Close"><X size={16} /></button></div>{children}</div></div>; }
 
@@ -128,35 +129,21 @@ export default function Home() {
   const snapshot = trpc.workspace.snapshot.useQuery(undefined, { enabled: isAuthenticated, retry: false, staleTime: 10_000 }); const utils = trpc.useUtils();
   const createTender = trpc.workspace.createTender.useMutation({ onSuccess: () => { toast.success("Tender created and persisted."); setModal(null); void utils.workspace.snapshot.invalidate(); }, onError: (error) => toast.error(error.message) }); const createBidder = trpc.workspace.createBidder.useMutation({ onSuccess: () => { toast.success("Bidder added to the workspace."); setModal(null); void utils.workspace.snapshot.invalidate(); }, onError: (error) => toast.error(error.message) }); const addRequirement = trpc.workspace.addRequirement.useMutation({ onSuccess: () => { toast.success("Requirement added to the verification ruleset."); setModal(null); void utils.workspace.snapshot.invalidate(); }, onError: (error) => toast.error(error.message) }); const runVerification = trpc.workspace.runVerification.useMutation({ onSuccess: (result) => { toast.success(result.message); void utils.workspace.snapshot.invalidate(); }, onError: (error) => toast.error(error.message) }); const uploadDocument = trpc.documents.upload.useMutation({ onSuccess: () => { toast.success("Document uploaded to private storage and processed."); setModal(null); void utils.workspace.snapshot.invalidate(); }, onError: (error) => toast.error(error.message) }); const recordDecision = trpc.workspace.recordDecision.useMutation({ onSuccess: () => { toast.success("Officer decision recorded in the audit trail."); setModal(null); void utils.workspace.snapshot.invalidate(); }, onError: (error) => toast.error(error.message) }); const signedUrl = trpc.documents.signedUrl.useMutation({ onSuccess: (result) => window.open(result.url, "_blank", "noopener,noreferrer"), onError: (error) => toast.error(error.message) }); const verifySource = trpc.connectors.verify.useMutation({ onSuccess: (result) => toast[result.live ? "success" : "message"](result.message), onError: (error) => toast.error(error.message) });
   if (loading) return <div className="loading-screen"><Loader2 className="spin" size={18} /> Checking secure session…</div>; if (!isAuthenticated || !user) return <AuthScreen onLogin={signIn} onRegister={signUp} onReset={requestReset} onDemoLogin={demoSignIn} busy={busy} />; if (snapshot.isLoading) return <div className="loading-screen"><Loader2 className="spin" size={18} /> Loading your organization workspace…</div>; if (snapshot.isError) return <div className="loading-screen"><TriangleAlert size={18} color="var(--red)" /> Unable to load workspace. <button className="button button-secondary" onClick={() => void snapshot.refetch()}>Retry</button></div>;
-  const data = snapshot.data!; const tenders = data.tenders as Array<Record<string, unknown>>; const bidders = data.bidders as Array<Record<string, unknown>>; const requirements = data.requirements as Array<Record<string, unknown>>; const documents = data.documents as Array<Record<string, unknown>>; const checks = data.checks as Array<Record<string, unknown>>; const audits = data.auditEvents as Array<Record<string, unknown>>; const sources = data.sources as Array<Record<string, unknown>>; const activeTender = tenders.find((row) => row.id === selectedTenderId) || tenders.find((row) => checks.some((check) => check.tenderId === row.id)) || tenders[0]; const activeBidder = bidders.find((row) => row.id === selectedBidderId) || bidders.find((row) => checks.some((check) => check.bidderId === row.id && check.tenderId === activeTender?.id)) || bidders[0]; const filteredTenders = tenders.filter((row) => JSON.stringify(row).toLowerCase().includes(search.toLowerCase())); const filteredBidders = bidders.filter((row) => JSON.stringify(row).toLowerCase().includes(search.toLowerCase())); const currentMeta: Record<string, { title: string; subtitle: string }> = { dashboard: { title: "Dashboard", subtitle: "Workspace overview of your procurement compliance." }, tenders: { title: "Tenders", subtitle: "Manage procurement events, requirements, and deadlines." }, bidders: { title: "Bidders", subtitle: "Review every bidder's compliance posture in one place." }, verification: { title: "Verification", subtitle: "Run deterministic rules against stored evidence." }, evidence: { title: "Evidence / PROVE IT", subtitle: "Trace every result back to the evidence that supports it." }, reports: { title: "Reports", subtitle: "Generate decision-support reports from persisted results." }, audit: { title: "Audit Trail", subtitle: "A complete, time-stamped record of workspace activity." }, settings: { title: "Settings", subtitle: "Manage verification sources and workspace preferences." } };
-  const renderPage = () => { if (currentPage === "tenders") return <TendersPage rows={filteredTenders} requirements={requirements} onCreate={() => setModal("tender")} onRequirement={(id) => { setSelectedTenderId(id); setModal("requirement"); }} onSelect={(id) => { setSelectedTenderId(id); navigate("verification"); }} />; if (currentPage === "bidders") return <BiddersPage rows={filteredBidders} onCreate={() => setModal("bidder")} onSelect={(id) => { setSelectedBidderId(id); navigate("verification"); }} />; if (currentPage === "verification") return <VerificationPage tenders={tenders} bidders={bidders} checks={checks} selectedTenderId={String(activeTender?.id || "")} selectedBidderId={String(activeBidder?.id || "")} onTender={setSelectedTenderId} onBidder={setSelectedBidderId} onRun={() => activeTender && activeBidder && runVerification.mutate({ tenderId: String(activeTender.id), bidderId: String(activeBidder.id) })} running={runVerification.isPending} onCheck={setSelectedCheck} />; if (currentPage === "evidence") return <EvidencePage documents={documents} evidence={data.evidence as Array<Record<string, unknown>>} checks={checks} tenders={tenders} bidders={bidders} onUpload={() => setModal("upload")} onOpen={(id) => signedUrl.mutate({ documentId: id })} onCheck={setSelectedCheck} />; if (currentPage === "reports") return <ReportsPage tenders={tenders} bidders={bidders} checks={checks} decisions={data.decisions as Array<Record<string, unknown>>} onDecision={() => setModal("decision")} />; if (currentPage === "audit") return <AuditPage rows={audits} />; if (currentPage === "settings") return <SettingsPage sources={sources} onVerify={(name) => verifySource.mutate({ name, payload: {} })} />; return <DashboardPage stats={data.stats} tenders={tenders} bidders={bidders} checks={checks} audits={audits} onCreate={() => setModal("tender")} onNavigate={navigate} onCheck={setSelectedCheck} />; };
+  const data = snapshot.data!; const tenders = data.tenders as Array<Record<string, unknown>>; const bidders = data.bidders as Array<Record<string, unknown>>; const requirements = data.requirements as Array<Record<string, unknown>>; const documents = data.documents as Array<Record<string, unknown>>; const checks = data.checks as Array<Record<string, unknown>>; const audits = data.auditEvents as Array<Record<string, unknown>>; const sources = data.sources as Array<Record<string, unknown>>; const allEvidence = data.evidence as Array<Record<string, unknown>>; const openProof = (check: Record<string, unknown>) => { const evidenceRecords = allEvidence.filter((item) => String(item.checkId) === String(check.id)); setSelectedCheck({ ...check, evidenceRecords }); }; const activeTender = tenders.find((row) => row.id === selectedTenderId) || tenders.find((row) => checks.some((check) => check.tenderId === row.id)) || tenders[0]; const activeBidder = bidders.find((row) => row.id === selectedBidderId) || bidders.find((row) => checks.some((check) => check.bidderId === row.id && check.tenderId === activeTender?.id)) || bidders[0]; const filteredTenders = tenders.filter((row) => JSON.stringify(row).toLowerCase().includes(search.toLowerCase())); const filteredBidders = bidders.filter((row) => JSON.stringify(row).toLowerCase().includes(search.toLowerCase())); const currentMeta: Record<string, { title: string; subtitle: string }> = { dashboard: { title: "Dashboard", subtitle: "Workspace overview of your procurement compliance." }, tenders: { title: "Tenders", subtitle: "Manage procurement events, requirements, and deadlines." }, bidders: { title: "Bidders", subtitle: "Review every bidder's compliance posture in one place." }, verification: { title: "Verification", subtitle: "Run deterministic rules against stored evidence." }, evidence: { title: "Evidence / PROVE IT", subtitle: "Trace every result back to the evidence that supports it." }, reports: { title: "Reports", subtitle: "Generate decision-support reports from persisted results." }, audit: { title: "Audit Trail", subtitle: "A complete, time-stamped record of workspace activity." }, settings: { title: "Settings", subtitle: "Manage verification sources and workspace preferences." } };
+  const renderPage = () => { if (currentPage === "tenders") return <TendersPage rows={filteredTenders} requirements={requirements} onCreate={() => setModal("tender")} onRequirement={(id) => { setSelectedTenderId(id); setModal("requirement"); }} onSelect={(id) => { setSelectedTenderId(id); navigate("verification"); }} />; if (currentPage === "bidders") return <BiddersPage rows={filteredBidders} onCreate={() => setModal("bidder")} onSelect={(id) => { setSelectedBidderId(id); navigate("verification"); }} />; if (currentPage === "verification") return <VerificationPage tenders={tenders} bidders={bidders} checks={checks} selectedTenderId={String(activeTender?.id || "")} selectedBidderId={String(activeBidder?.id || "")} onTender={setSelectedTenderId} onBidder={setSelectedBidderId} onRun={() => activeTender && activeBidder && runVerification.mutate({ tenderId: String(activeTender.id), bidderId: String(activeBidder.id) })} running={runVerification.isPending} onCheck={openProof} />; if (currentPage === "evidence") return <EvidencePage documents={documents} evidence={data.evidence as Array<Record<string, unknown>>} checks={checks} tenders={tenders} bidders={bidders} onUpload={() => setModal("upload")} onOpen={(id) => signedUrl.mutate({ documentId: id })} onCheck={openProof} />; if (currentPage === "reports") return <ReportsPage tenders={tenders} bidders={bidders} checks={checks} decisions={data.decisions as Array<Record<string, unknown>>} onDecision={() => setModal("decision")} />; if (currentPage === "audit") return <AuditPage rows={audits} />; if (currentPage === "settings") return <SettingsPage sources={sources} onVerify={(name) => verifySource.mutate({ name, payload: {} })} />; return <DashboardPage stats={data.stats} tenders={tenders} bidders={bidders} checks={checks} audits={audits} onCreate={() => setModal("tender")} onNavigate={navigate} onCheck={openProof} />; };
   return <div className="app-shell"><Sidebar currentPage={currentPage} collapsed={collapsed} onCollapse={() => setCollapsed((value) => !value)} onNavigate={navigate} onLogout={signOut} userName={user.name || user.email || "Officer"} organization={user.organizationName} counts={{ review: data.stats.needsReview, evidence: documents.length }} /><main className={`main-area ${collapsed ? "main-collapsed" : ""}`}><Topbar title={currentMeta[currentPage]?.title || "Workspace"} subtitle={currentMeta[currentPage]?.subtitle || ""} onMenu={() => setCollapsed((value) => !value)} search={search} setSearch={setSearch} /><div className="page-content">{tenders.some((row) => row.isDemo) && <div className="demo-ribbon"><div><BadgeCheck size={15} /><strong>DEMO WORKSPACE</strong><span className="ribbon-separator" /><span>Fictional tenders, bidders and evidence for the SIH 2026 walkthrough.</span></div><span>Government connectors are sandboxed · no live verification</span></div>}{renderPage()}</div></main>{selectedCheck && <ProveItModal check={selectedCheck} onClose={() => setSelectedCheck(null)} onOpenDocument={(c) => { const docId = c.documentId; if (typeof docId === "string" && docId && docId !== "—") { signedUrl.mutate({ documentId: docId }); } else { const key = c.fileKey || c.document || "Sample-Evidence.pdf"; window.open(`/api/documents/preview/${encodeURIComponent(String(key))}`, "_blank"); } }} />}{modal === "tender" && <TenderModal onClose={() => setModal(null)} busy={createTender.isPending} onSubmit={(input) => createTender.mutate(input)} />}{modal === "bidder" && <BidderModal tenders={tenders} onClose={() => setModal(null)} busy={createBidder.isPending} onSubmit={(input) => createBidder.mutate(input)} />}{modal === "requirement" && <RequirementModal tenderId={String(selectedTenderId || activeTender?.id || "")} onClose={() => setModal(null)} busy={addRequirement.isPending} onSubmit={(input) => addRequirement.mutate(input)} />}{modal === "upload" && <UploadModal tenders={tenders} bidders={bidders} onClose={() => setModal(null)} busy={uploadDocument.isPending} onSubmit={(input) => uploadDocument.mutate(input)} />}{modal === "decision" && activeTender && activeBidder && <DecisionModal tenderId={String(activeTender.id)} bidderId={String(activeBidder.id)} onClose={() => setModal(null)} busy={recordDecision.isPending} onSubmit={(input) => recordDecision.mutate(input)} />}</div>;
 }
 
-function DashboardPage({ stats, tenders, bidders, checks, audits, onCreate, onNavigate, onCheck }: { stats: { activeTenders: number; biddersUnderReview: number; verified: number; needsReview: number; nonCompliant: number; pendingDocuments: number }; tenders: Array<Record<string, unknown>>; bidders: Array<Record<string, unknown>>; checks: Array<Record<string, unknown>>; audits: Array<Record<string, unknown>>; onCreate: () => void; onNavigate: (page: string) => void; onCheck?: (check: Record<string, unknown>) => void }) { const kpis = [["Active tenders", stats.activeTenders, "Persisted in PostgreSQL", FolderOpen, "blue"], ["Bidders under review", stats.biddersUnderReview, "Officer attention required", UsersRound, "orange"], ["Verified", stats.verified, "Recorded decision support", BadgeCheck, "green"], ["Needs review", stats.needsReview, "Contradictions or missing evidence", TriangleAlert, "orange"], ["Non-compliant", stats.nonCompliant, "Requires officer action", AlertCircle, "red"], ["Pending documents", stats.pendingDocuments, "Processing or not submitted", Clock3, "gray"]] as const; return <><div className="welcome-row"><div><div className="eyebrow">{new Date().toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).toUpperCase()}</div><h2>Good morning, Officer.</h2><p>Here is the current view of your live compliance data.</p></div><button className="button button-primary button-large" onClick={onCreate}><Plus size={16} /> Create tender</button></div><div className="kpi-grid">{kpis.map(([label, value, meta, Icon, tone]) => <div className={`kpi-card kpi-${tone}`} key={label}><span className="kpi-icon"><Icon size={17} /></span><div><span>{label}</span><strong>{value}</strong><small>{meta}</small></div></div>)}</div><div className="dashboard-grid"><section className="panel span-8"><div className="section-heading"><div><div className="eyebrow">PORTFOLIO</div><h2>Active tenders</h2></div><button className="link-button" onClick={() => onNavigate("tenders")}>View all <ArrowRight size={14} /></button></div>{tenders.length === 0 ? <EmptyState icon={FolderOpen} title="No tenders yet" copy="Create your first procurement event to begin collecting requirements and evidence." /> : <div className="table-wrap"><table><thead><tr><th>Tender</th><th>Department</th><th>Closing</th><th>Bidders</th><th>Progress</th></tr></thead><tbody>{tenders.slice(0, 6).map((tender) => <tr key={String(tender.id)}><td><strong>{String(tender.title)}</strong><small>{String(tender.externalId)}</small></td><td>{String(tender.department)}</td><td>{String(tender.closing || "—")}</td><td>{String(tender.bidders || 0)}</td><td><div className="progress-cell"><b>{String(tender.progress || 0)}%</b><span className="progress-track"><i style={{ width: `${Number(tender.progress || 0)}%` }} /></span></div></td></tr>)}</tbody></table></div>}</section><section className="panel span-4"><div className="section-heading"><div><div className="eyebrow">ATTENTION REQUIRED</div><h2>Needs review</h2></div><button className="icon-button subtle" onClick={() => onNavigate("verification")}><ArrowRight size={15} /></button></div>{checks.filter((check) => check.result === "Needs Review" || check.result === "Pending").slice(0, 4).map((check) => <button className="finding-row" key={String(check.id)} onClick={() => onCheck ? onCheck(check) : onNavigate("verification")}><span className="finding-icon finding-orange"><TriangleAlert size={15} /></span><span><strong>{String(check.requirement)}</strong><small>{String(check.detail || "Officer follow-up required")}</small></span><ArrowRight size={14} /></button>)}{checks.filter((check) => check.result === "Needs Review" || check.result === "Pending").length === 0 && <EmptyState icon={CheckCircle2} title="No open findings" copy="Verification exceptions will appear here." />}</section></div><div className="dashboard-grid"><section className="panel span-7"><div className="section-heading"><div><div className="eyebrow">BIDDER HEALTH</div><h2>Latest compliance posture</h2></div><button className="link-button" onClick={() => onNavigate("bidders")}>All bidders <ArrowRight size={14} /></button></div>{bidders.length === 0 ? <EmptyState icon={UsersRound} title="No bidders yet" copy="Add bidders to compare submissions against the ruleset." /> : <div className="table-wrap"><table><thead><tr><th>Bidder</th><th>Registration</th><th>Score</th><th>Status</th></tr></thead><tbody>{bidders.slice(0, 5).map((bidder) => <tr key={String(bidder.id)}><td><strong>{String(bidder.name)}</strong><small>{String(bidder.documents || "0 / 0")} documents</small></td><td>{String(bidder.registration)}</td><td><b>{String(bidder.compliance || 0)}</b></td><td><StatusBadge status={String(bidder.status)} /></td></tr>)}</tbody></table></div>}</section><section className="panel span-5"><div className="section-heading"><div><div className="eyebrow">RECENT ACTIVITY</div><h2>Audit trail</h2></div><button className="link-button" onClick={() => onNavigate("audit")}>View trail <ArrowRight size={14} /></button></div>{audits.slice(0, 5).map((event) => <div className="activity-row" key={String(event.id)}><span className="activity-dot" /><div><strong>{String(event.action)}</strong><small>{String(event.entity)} · {String(event.time)}</small></div><StatusBadge status={String(event.status)} /></div>)}{audits.length === 0 && <EmptyState icon={Activity} title="No activity yet" copy="Your first action will be recorded here." />}</section></div></>; }
+function DashboardPage({ stats, tenders, bidders, checks, audits, onCreate, onNavigate, onCheck }: { stats: { activeTenders: number; biddersUnderReview: number; verified: number; needsReview: number; nonCompliant: number; pendingDocuments: number }; tenders: Array<Record<string, unknown>>; bidders: Array<Record<string, unknown>>; checks: Array<Record<string, unknown>>; audits: Array<Record<string, unknown>>; onCreate: () => void; onNavigate: (page: string) => void; onCheck?: (check: Record<string, unknown>) => void }) { const kpis = [["Active tenders", stats.activeTenders, "Persisted in PostgreSQL", FolderOpen, "blue"], ["Bidders under review", stats.biddersUnderReview, "Officer attention required", UsersRound, "orange"], ["Verified", stats.verified, "Recorded decision support", BadgeCheck, "green"], ["Needs review", stats.needsReview, "Contradictions or missing evidence", TriangleAlert, "orange"], ["Non-compliant", stats.nonCompliant, "Requires officer action", AlertCircle, "red"], ["Pending documents", stats.pendingDocuments, "Processing or not submitted", Clock3, "gray"]] as const; return <><div className="welcome-row"><div><div className="eyebrow">{new Date().toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).toUpperCase()}</div><h2>Good morning, Officer.</h2><p>Here is the current view of your live compliance data.</p></div><button className="button button-primary button-large" onClick={onCreate}><Plus size={16} /> Create tender</button></div><div className="kpi-grid">{kpis.map(([label, value, meta, Icon, tone]) => <div className={`kpi-card kpi-${tone}`} key={label}><span className="kpi-icon"><Icon size={17} /></span><div><span>{label}</span><strong>{value}</strong><small>{meta}</small></div></div>)}</div><div className="dashboard-grid"><section className="panel span-8"><div className="section-heading"><div><div className="eyebrow">PORTFOLIO</div><h2>Active tenders</h2></div><button className="link-button" onClick={() => onNavigate("tenders")}>View all <ArrowRight size={14} /></button></div>{tenders.length === 0 ? <EmptyState icon={FolderOpen} title="No tenders yet" copy="Create your first procurement event to begin collecting requirements and evidence." /> : <div className="table-wrap"><table><thead><tr><th>Tender</th><th>Department</th><th>Closing</th><th>Bidders</th><th>Progress</th></tr></thead><tbody>{tenders.slice(0, 6).map((tender) => <tr key={String(tender.id)}><td><strong>{String(tender.title)}</strong><small>{String(tender.externalId)}</small></td><td>{String(tender.department)}</td><td>{String(tender.closing || "—")}</td><td>{String(tender.bidders || 0)}</td><td><div className="progress-cell"><b>{String(tender.progress || 0)}%</b><span className="progress-track"><i style={{ width: `${Number(tender.progress || 0)}%` }} /></span></div></td></tr>)}</tbody></table></div>}</section><section className="panel span-4"><div className="section-heading"><div><div className="eyebrow">ATTENTION REQUIRED</div><h2>Needs review</h2></div><button className="icon-button subtle" onClick={() => onNavigate("verification")}><ArrowRight size={15} /></button></div>{checks.filter((check) => check.result === "Needs Review" || isPendingStatus(check.result)).slice(0, 4).map((check) => <button className="finding-row" key={String(check.id)} onClick={() => onCheck ? onCheck(check) : onNavigate("verification")}><span className="finding-icon finding-orange"><TriangleAlert size={15} /></span><span><strong>{String(check.requirement)}</strong><small>{String(check.detail || "Officer follow-up required")}</small></span><ArrowRight size={14} /></button>)}{checks.filter((check) => check.result === "Needs Review" || isPendingStatus(check.result)).length === 0 && <EmptyState icon={CheckCircle2} title="No open findings" copy="Verification exceptions will appear here." />}</section></div><div className="dashboard-grid"><section className="panel span-7"><div className="section-heading"><div><div className="eyebrow">BIDDER HEALTH</div><h2>Latest compliance posture</h2></div><button className="link-button" onClick={() => onNavigate("bidders")}>All bidders <ArrowRight size={14} /></button></div>{bidders.length === 0 ? <EmptyState icon={UsersRound} title="No bidders yet" copy="Add bidders to compare submissions against the ruleset." /> : <div className="table-wrap"><table><thead><tr><th>Bidder</th><th>Registration</th><th>Score</th><th>Status</th></tr></thead><tbody>{bidders.slice(0, 5).map((bidder) => <tr key={String(bidder.id)}><td><strong>{String(bidder.name)}</strong><small>{String(bidder.documents || "0 / 0")} documents</small></td><td>{String(bidder.registration)}</td><td><b>{String(bidder.compliance || 0)}</b></td><td><StatusBadge status={String(bidder.status)} /></td></tr>)}</tbody></table></div>}</section><section className="panel span-5"><div className="section-heading"><div><div className="eyebrow">RECENT ACTIVITY</div><h2>Audit trail</h2></div><button className="link-button" onClick={() => onNavigate("audit")}>View trail <ArrowRight size={14} /></button></div>{audits.slice(0, 5).map((event) => <div className="activity-row" key={String(event.id)}><span className="activity-dot" /><div><strong>{String(event.action)}</strong><small>{String(event.entity)} · {String(event.time)}</small></div><StatusBadge status={String(event.status)} /></div>)}{audits.length === 0 && <EmptyState icon={Activity} title="No activity yet" copy="Your first action will be recorded here." />}</section></div></>; }
 
-function TendersPage({ rows, requirements, onCreate, onRequirement, onSelect }: { rows: Array<Record<string, unknown>>; requirements: Array<Record<string, unknown>>; onCreate: () => void; onRequirement: (id: string) => void; onSelect: (id: string) => void }) { return <><div className="page-actions-row"><div><div className="eyebrow">PROCUREMENT EVENTS</div><h2>All tenders</h2><p>Workspace tenders, including clearly labeled SIH prototype samples.</p></div><button className="button button-primary" onClick={onCreate}><Plus size={15} /> Create tender</button></div><section className="panel"><div className="panel-heading-inline"><div className="table-meta"><Database size={16} color="var(--blue)" /> PostgreSQL records <span>{rows.length} tenders</span></div><SlidersHorizontal size={17} color="var(--gray-500)" /></div>{rows.length === 0 ? <EmptyState icon={FolderOpen} title="No tenders in this workspace" copy="Create a tender to start the evidence-backed workflow." action={<button className="button button-primary" onClick={onCreate}><Plus size={14} /> Create tender</button>} /> : <div className="table-wrap"><table><thead><tr><th>Tender ID</th><th>Tender title</th><th>Department</th><th>Closing date</th><th>Bidders</th><th>Requirements</th><th>Status</th><th /></tr></thead><tbody>{rows.map((row) => <tr key={String(row.id)}><td className="mono">{String(row.externalId)}{row.isDemo === true && <small>DEMO SAMPLE</small>}</td><td><button className="table-link" onClick={() => onSelect(String(row.id))}><strong>{String(row.title)}</strong></button><small>{String(row.description || "No description")}</small></td><td>{String(row.department)}</td><td>{String(row.closing || "—")}</td><td>{String(row.bidders || 0)}</td><td>{requirements.filter((requirement) => requirement.tenderId === row.id).length}</td><td><StatusBadge status={String(row.status)} /></td><td><button className="icon-button subtle" title="Add requirement" onClick={() => onRequirement(String(row.id))}><Plus size={14} /></button></td></tr>)}</tbody></table></div>}</section></>; }
+function tenderDate(value: unknown) { const date = value ? new Date(String(value)) : null; return date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"; }
+function TendersPage({ rows, requirements, onCreate, onRequirement, onSelect }: { rows: Array<Record<string, unknown>>; requirements: Array<Record<string, unknown>>; onCreate: () => void; onRequirement: (id: string) => void; onSelect: (id: string) => void }) { return <><div className="page-actions-row"><div><div className="eyebrow">PROCUREMENT EVENTS</div><h2>All tenders</h2><p>Workspace tenders, including clearly labeled SIH prototype samples.</p></div><button className="button button-primary" onClick={onCreate}><Plus size={15} /> Create tender</button></div><section className="panel"><div className="panel-heading-inline"><div className="table-meta"><Database size={16} color="var(--blue)" /> PostgreSQL records <span>{rows.length} tenders</span></div><SlidersHorizontal size={17} color="var(--gray-500)" /></div>{rows.length === 0 ? <EmptyState icon={FolderOpen} title="No tenders in this workspace" copy="Create a tender to start the evidence-backed workflow." action={<button className="button button-primary" onClick={onCreate}><Plus size={14} /> Create tender</button>} /> : <div className="table-wrap"><table><thead><tr><th>Tender ID</th><th>Tender title</th><th>Department</th><th>Tender date</th><th>Closing date</th><th>Bidders</th><th>Requirements</th><th>Status</th><th /></tr></thead><tbody>{rows.map((row) => <tr key={String(row.id)}><td className="mono">{String(row.externalId)}{row.isDemo === true && <small>DEMO SAMPLE</small>}</td><td><button className="table-link" onClick={() => onSelect(String(row.id))}><strong>{String(row.title)}</strong></button><small>{String(row.description || "No description")}</small></td><td>{String(row.department)}</td><td>{tenderDate(row.createdAt)}</td><td>{String(row.closing || "—")}</td><td>{String(row.bidders || 0)}</td><td>{requirements.filter((requirement) => requirement.tenderId === row.id).length}</td><td><StatusBadge status={String(row.status)} /></td><td><button className="icon-button subtle" title="Add requirement" onClick={() => onRequirement(String(row.id))}><Plus size={14} /></button></td></tr>)}</tbody></table></div>}</section></>; }
 function BiddersPage({ rows, onCreate, onSelect }: { rows: Array<Record<string, unknown>>; onCreate: () => void; onSelect: (id: string) => void }) { return <><div className="page-actions-row"><div><div className="eyebrow">SUPPLIER COMPLIANCE</div><h2>All bidders</h2><p>Registration and evidence status sourced from your workspace.</p></div><button className="button button-primary" onClick={onCreate}><UserPlus size={15} /> Add bidder</button></div><section className="panel"><div className="stats-strip"><div><span>Total bidders</span><strong>{rows.length}</strong></div><div><span>Verified</span><strong className="text-green">{rows.filter((row) => row.status === "Verified").length}</strong></div><div><span>Needs review</span><strong className="text-orange">{rows.filter((row) => row.status === "Needs Review").length}</strong></div><div><span>Non-compliant</span><strong className="text-red">{rows.filter((row) => row.status === "Non-Compliant").length}</strong></div></div>{rows.length === 0 ? <EmptyState icon={UsersRound} title="No bidders in this workspace" copy="Add a bidder to begin collecting registration and compliance evidence." action={<button className="button button-primary" onClick={onCreate}><UserPlus size={14} /> Add bidder</button>} /> : <div className="table-wrap"><table><thead><tr><th>Bidder</th><th>Registration ID</th><th>Documents</th><th>Compliance</th><th>Risk</th><th>Verification</th><th /></tr></thead><tbody>{rows.map((row) => <tr key={String(row.id)}><td><button className="table-link" onClick={() => onSelect(String(row.id))}><strong>{String(row.name)}</strong></button><small>{String(row.gstin || "GSTIN not supplied")}</small></td><td className="mono">{String(row.registration)}</td><td>{String(row.documents || "0 / 0")}</td><td><div className="score-cell"><b>{String(row.compliance || 0)}</b><span className="progress-track"><i style={{ width: `${Number(row.compliance || 0)}%` }} /></span></div></td><td><span className={`risk-chip risk-${String(row.risk).toLowerCase()}`}>{String(row.risk)}</span></td><td><StatusBadge status={String(row.status)} /></td><td><button className="button button-quiet" onClick={() => onSelect(String(row.id))}>Review <ArrowRight size={13} /></button></td></tr>)}</tbody></table></div>}</section></>; }
-function VerificationPage({ tenders, bidders, checks, selectedTenderId, selectedBidderId, onTender, onBidder, onRun, running, onCheck }: { tenders: Array<Record<string, unknown>>; bidders: Array<Record<string, unknown>>; checks: Array<Record<string, unknown>>; selectedTenderId: string; selectedBidderId: string; onTender: (value: string) => void; onBidder: (value: string) => void; onRun: () => void; running: boolean; onCheck: (check: Record<string, unknown>) => void }) { const visible = checks.filter((check) => (!selectedTenderId || check.tenderId === selectedTenderId) && (!selectedBidderId || check.bidderId === selectedBidderId)); return <><div className="page-actions-row"><div><div className="eyebrow">RULES ENGINE</div><h2>Verification</h2><p>Deterministic checks run against persisted requirements and private evidence.</p></div><button className="button button-primary" disabled={!selectedTenderId || !selectedBidderId || running} onClick={onRun}>{running ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />} Run verification</button></div><section className="verification-toolbar"><label><span>Tender</span><select value={selectedTenderId} onChange={(e) => onTender(e.target.value)}><option value="">Select a tender</option>{tenders.map((tender) => <option value={String(tender.id)} key={String(tender.id)}>{String(tender.title)}</option>)}</select></label><label><span>Bidder</span><select value={selectedBidderId} onChange={(e) => onBidder(e.target.value)}><option value="">Select a bidder</option>{bidders.map((bidder) => <option value={String(bidder.id)} key={String(bidder.id)}>{String(bidder.name)}</option>)}</select></label></section><div className="verification-summary"><div><span>Checks shown</span><strong>{visible.length}</strong></div><div><span>Verified</span><strong className="text-green">{visible.filter((check) => check.result === "Verified").length}</strong></div><div><span>Needs review</span><strong className="text-orange">{visible.filter((check) => check.result === "Needs Review").length}</strong></div><div><span>Pending</span><strong>{visible.filter((check) => check.result === "Pending").length}</strong></div></div><section className="panel"><div className="section-heading"><div><div className="eyebrow">COMPLIANCE ENGINE</div><h2>Verification checks</h2></div><span className="evidence-note"><ShieldCheck size={14} /> Evidence-linked</span></div>{visible.length === 0 ? <EmptyState icon={ClipboardCheck} title="No verification results yet" copy="Select a tender and bidder, then run verification after adding requirements and documents." /> : <div className="table-wrap"><table><thead><tr><th>Requirement</th><th>Evidence</th><th>Source</th><th>Result</th><th>Confidence</th><th /></tr></thead><tbody>{visible.map((check) => <tr key={String(check.id)}><td><strong>{String(check.requirement)}</strong><small>{String(check.detail || "")}</small></td><td><FileText size={14} /> {String(check.document || check.evidence || "Not submitted")}</td><td>{String(check.source)}</td><td><StatusBadge status={String(check.result)} /></td><td><span className="confidence"><i className={`confidence-${String(check.confidence).toLowerCase()}`} />{String(check.confidence)}</span></td><td><button type="button" className="button-prove-it" onClick={() => onCheck(check)} title="PROVE IT Dossier"><ShieldCheck size={13} /> PROVE IT</button></td></tr>)}</tbody></table></div>}</section></>; }
+function VerificationPage({ tenders, bidders, checks, selectedTenderId, selectedBidderId, onTender, onBidder, onRun, running, onCheck }: { tenders: Array<Record<string, unknown>>; bidders: Array<Record<string, unknown>>; checks: Array<Record<string, unknown>>; selectedTenderId: string; selectedBidderId: string; onTender: (value: string) => void; onBidder: (value: string) => void; onRun: () => void; running: boolean; onCheck: (check: Record<string, unknown>) => void }) { const visible = checks.filter((check) => (!selectedTenderId || check.tenderId === selectedTenderId) && (!selectedBidderId || check.bidderId === selectedBidderId)); return <><div className="page-actions-row"><div><div className="eyebrow">RULES ENGINE</div><h2>Verification</h2><p>Deterministic checks run against persisted requirements and private evidence.</p></div><button className="button button-primary" disabled={!selectedTenderId || !selectedBidderId || running} onClick={onRun}>{running ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />} Run verification</button></div><section className="verification-toolbar"><label><span>Tender</span><select value={selectedTenderId} onChange={(e) => onTender(e.target.value)}><option value="">Select a tender</option>{tenders.map((tender) => <option value={String(tender.id)} key={String(tender.id)}>{String(tender.title)}</option>)}</select></label><label><span>Bidder</span><select value={selectedBidderId} onChange={(e) => onBidder(e.target.value)}><option value="">Select a bidder</option>{bidders.map((bidder) => <option value={String(bidder.id)} key={String(bidder.id)}>{String(bidder.name)}</option>)}</select></label></section><div className="verification-summary"><div><span>Checks shown</span><strong>{visible.length}</strong></div><div><span>Verified</span><strong className="text-green">{visible.filter((check) => check.result === "Verified").length}</strong></div><div><span>Needs review</span><strong className="text-orange">{visible.filter((check) => check.result === "Needs Review").length}</strong></div><div><span>Pending</span><strong>{visible.filter((check) => isPendingStatus(check.result)).length}</strong></div></div><section className="panel"><div className="section-heading"><div><div className="eyebrow">COMPLIANCE ENGINE</div><h2>Verification checks</h2></div><span className="evidence-note"><ShieldCheck size={14} /> Evidence-linked</span></div>{visible.length === 0 ? <EmptyState icon={ClipboardCheck} title="No verification results yet" copy="Select a tender and bidder, then run verification after adding requirements and documents." /> : <div className="table-wrap"><table><thead><tr><th>Requirement</th><th>Evidence</th><th>Source</th><th>Result</th><th>Confidence</th><th /></tr></thead><tbody>{visible.map((check) => <tr key={String(check.id)}><td><strong>{String(check.requirement)}</strong><small>{String(check.detail || "")}</small></td><td><FileText size={14} /> {String(check.document || check.evidence || "Not submitted")}</td><td>{String(check.source)}</td><td><StatusBadge status={String(check.result)} /></td><td><span className="confidence"><i className={`confidence-${String(check.confidence).toLowerCase()}`} />{String(check.confidence)}</span></td><td><button type="button" className="button-prove-it" onClick={() => onCheck(check)} title="PROVE IT Dossier"><ShieldCheck size={13} /> PROVE IT</button></td></tr>)}</tbody></table></div>}</section></>; }
 function EvidencePage({ documents, evidence, checks, tenders, bidders, onUpload, onOpen, onCheck }: { documents: Array<Record<string, unknown>>; evidence: Array<Record<string, unknown>>; checks?: Array<Record<string, unknown>>; tenders: Array<Record<string, unknown>>; bidders: Array<Record<string, unknown>>; onUpload: () => void; onOpen: (id: string) => void; onCheck?: (check: Record<string, unknown>) => void }) { return <><div className="page-actions-row"><div><div className="eyebrow">PRIVATE DOCUMENT VAULT</div><h2>Evidence that stands up to scrutiny.</h2><p>Documents are stored privately and accessed with expiring signed links.</p></div><button className="button button-primary" onClick={onUpload}><CloudUpload size={15} /> Upload document</button></div><div className="evidence-hero"><div><div className="eyebrow">TRACEABILITY</div><h2>Every important result has a source.</h2><p>VerifAI connects documents, extracted fields, requirements, rules, and officer decisions without exposing files publicly.</p></div><div className="evidence-metrics"><div><strong>{evidence.length}</strong><span>evidence links</span></div><div><strong>{documents.length}</strong><span>private files</span></div><div><strong>{documents.filter((doc) => doc.process === "Processed").length}</strong><span>processed</span></div></div></div><div className="dashboard-grid"><section className="panel span-7"><div className="section-heading"><div><div className="eyebrow">DOCUMENTS</div><h2>Uploaded evidence</h2></div></div>{documents.length === 0 ? <EmptyState icon={FileText} title="No documents uploaded" copy="Upload a tender or bidder document to start OCR and evidence extraction." action={<button className="button button-primary" onClick={onUpload}><CloudUpload size={14} /> Upload first document</button>} /> : <div className="table-wrap"><table><thead><tr><th>File</th><th>Type</th><th>Processing</th><th>Uploaded</th><th /></tr></thead><tbody>{documents.map((doc) => <tr key={String(doc.id)}><td><strong>{String(doc.fileName || doc.file)}</strong><small>{String(doc.mimeType)}</small></td><td>{String(doc.type || "Other")}</td><td><StatusBadge status={String(doc.process || "Uploaded")} /></td><td>{String(doc.date || "—")}</td><td><button className="button button-quiet" onClick={() => onOpen(String(doc.id))}><ExternalLink size={13} /> Open securely</button></td></tr>)}</tbody></table></div>}</section><section className="panel span-5"><div className="section-heading"><div><div className="eyebrow">EVIDENCE LINKS</div><h2>Recent proof points</h2></div></div>{evidence.slice(0, 8).map((item) => { const linked = checks?.find((c) => c.id === item.checkId) || { requirement: String(item.document || "Statutory Evidence"), document: String(item.document || "Vault File"), extracted: String(item.extracted || item.evidence || "Verified claim"), relevantEvidence: String(item.evidence || item.extracted || "Extracted from source"), source: String(item.source || "Government Portal"), confidence: String(item.confidence || "High"), result: "Verified", detail: "Statutory proof verified from private storage document." }; return <div className="finding-row" key={String(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", padding: "10px 0", borderBottom: "1px solid var(--gray-200)" }}><div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minWidth: 0 }}><span className="finding-icon finding-green"><CheckCircle2 size={15} /></span><div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}><strong style={{ fontSize: "12px", color: "var(--gray-800)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{String(item.document)}</strong><small style={{ color: "var(--gray-500)", fontSize: "10px" }}>{String(item.extracted || item.evidence || "Document evidence")}</small></div></div><div style={{ display: "flex", alignItems: "center", gap: "8px" }}><StatusBadge status={String(item.confidence || "Low")} />{onCheck && <button type="button" className="button-prove-it" style={{ padding: "3px 8px", fontSize: "10px" }} onClick={() => onCheck(linked)}><ShieldCheck size={11} /> PROVE IT</button>}</div></div>; })}{evidence.length === 0 && <EmptyState icon={FileCheck2} title="No evidence links yet" copy="Run verification after processing a document." />}</section></div></>; }
-function ReportsPage({ tenders, bidders, checks, decisions, onDecision }: { tenders: Array<Record<string, unknown>>; bidders: Array<Record<string, unknown>>; checks: Array<Record<string, unknown>>; decisions: Array<Record<string, unknown>>; onDecision: () => void }) { return <><div className="page-actions-row"><div><div className="eyebrow">DECISION SUPPORT</div><h2>Compliance reports</h2><p>Reports are derived from persisted verification results and officer decisions.</p></div><button className="button button-primary" onClick={onDecision} disabled={!tenders[0] || !bidders[0]}><Check size={15} /> Record officer decision</button></div><section className="report-preview"><div className="report-header"><div><div className="eyebrow">VERIFAI · COMPLIANCE REPORT</div><h2>{tenders[0] ? String(tenders[0].title) : "No tender selected"}</h2><p>{bidders[0] ? `${String(bidders[0].name)} · Workspace report` : "Add a tender and bidder to generate a report."}</p></div><div className="report-score">{bidders[0] ? String(bidders[0].compliance || 0) : "—"}<small>/ 100</small></div></div><div className="report-grid"><div><span>Verification results</span><strong>{checks.filter((check) => check.result === "Verified").length} verified · {checks.filter((check) => check.result === "Needs Review").length} review · {checks.filter((check) => check.result === "Pending").length} pending</strong></div><div><span>Officer decisions</span><strong>{decisions.length} recorded</strong></div><div><span>Recommendation</span><strong>{decisions[0] ? String(decisions[0].decision) : "Awaiting officer decision"}</strong></div><div><span>Evidence basis</span><strong>{checks.length} checks linked to workspace evidence</strong></div></div><div className="report-disclaimer"><ShieldCheck size={15} /> VerifAI provides decision support. The final qualification decision is recorded by the Procurement Officer.</div></section><section className="panel"><div className="section-heading"><div><div className="eyebrow">DECISION LOG</div><h2>Officer decisions</h2></div></div>{decisions.length === 0 ? <EmptyState icon={FileText} title="No decisions recorded" copy="Complete verification and record the final officer decision when ready." /> : <div className="table-wrap"><table><thead><tr><th>Decision</th><th>Comment</th><th>Officer</th><th>Recorded</th></tr></thead><tbody>{decisions.map((row) => <tr key={String(row.id)}><td><StatusBadge status={String(row.decision)} /></td><td>{String(row.comment)}</td><td>{String(row.officer)}</td><td>{new Date(String(row.createdAt)).toLocaleString("en-IN")}</td></tr>)}</tbody></table></div>}</section></>; }
+function ReportsPage({ tenders, bidders, checks, decisions, onDecision }: { tenders: Array<Record<string, unknown>>; bidders: Array<Record<string, unknown>>; checks: Array<Record<string, unknown>>; decisions: Array<Record<string, unknown>>; onDecision: () => void }) { return <><div className="page-actions-row"><div><div className="eyebrow">DECISION SUPPORT</div><h2>Compliance reports</h2><p>Reports are derived from persisted verification results and officer decisions.</p></div><button className="button button-primary" onClick={onDecision} disabled={!tenders[0] || !bidders[0]}><Check size={15} /> Record officer decision</button></div><section className="report-preview"><div className="report-header"><div><div className="eyebrow">VERIFAI · COMPLIANCE REPORT</div><h2>{tenders[0] ? String(tenders[0].title) : "No tender selected"}</h2><p>{bidders[0] ? `${String(bidders[0].name)} · Workspace report` : "Add a tender and bidder to generate a report."}</p></div><div className="report-score">{bidders[0] ? String(bidders[0].compliance || 0) : "—"}<small>/ 100</small></div></div><div className="report-grid"><div><span>Verification results</span><strong>{checks.filter((check) => check.result === "Verified").length} verified · {checks.filter((check) => check.result === "Needs Review").length} review · {checks.filter((check) => isPendingStatus(check.result)).length} pending</strong></div><div><span>Officer decisions</span><strong>{decisions.length} recorded</strong></div><div><span>Recommendation</span><strong>{decisions[0] ? String(decisions[0].decision) : "Awaiting officer decision"}</strong></div><div><span>Evidence basis</span><strong>{checks.length} checks linked to workspace evidence</strong></div></div><div className="report-disclaimer"><ShieldCheck size={15} /> VerifAI provides decision support. The final qualification decision is recorded by the Procurement Officer.</div></section><section className="panel"><div className="section-heading"><div><div className="eyebrow">DECISION LOG</div><h2>Officer decisions</h2></div></div>{decisions.length === 0 ? <EmptyState icon={FileText} title="No decisions recorded" copy="Complete verification and record the final officer decision when ready." /> : <div className="table-wrap"><table><thead><tr><th>Decision</th><th>Comment</th><th>Officer</th><th>Recorded</th></tr></thead><tbody>{decisions.map((row) => <tr key={String(row.id)}><td><StatusBadge status={String(row.decision)} /></td><td>{String(row.comment)}</td><td>{String(row.officer)}</td><td>{new Date(String(row.createdAt)).toLocaleString("en-IN")}</td></tr>)}</tbody></table></div>}</section></>; }
 function AuditPage({ rows }: { rows: Array<Record<string, unknown>> }) { return <><div className="audit-toolbar"><div><div className="eyebrow">IMMUTABLE ACTIVITY LOG</div><h2>Audit trail</h2><p>Every action is recorded with user, entity, status, and time.</p></div><div className="audit-integrity"><ShieldCheck size={15} /> Organization-scoped log</div></div><section className="panel audit-panel">{rows.length === 0 ? <EmptyState icon={Activity} title="No activity recorded" copy="Workspace actions will appear here." /> : rows.map((row) => <div className="audit-row" key={String(row.id)}><div className="audit-time">{String(row.time)}<small>IST</small></div><span className="audit-line"><i /></span><div className="audit-body"><strong>{String(row.action)}</strong><span>{String(row.entity)} · {String(row.user)}</span></div><StatusBadge status={String(row.status)} /></div>)}</section></>; }
 function SettingsPage({ sources, onVerify }: { sources: Array<Record<string, unknown>>; onVerify: (name: string) => void }) { return <><div className="page-actions-row"><div><div className="eyebrow">SOURCE REGISTRY</div><h2>Verification sources</h2><p>Only explicitly configured connectors can make live source calls. Unconfigured sources stay clearly labelled.</p></div></div><div className="dashboard-grid"><section className="panel span-7"><div className="section-heading"><div><div className="eyebrow">GOVERNMENT CONNECTORS</div><h2>Approved source registry</h2></div><Database size={17} color="var(--blue)" /></div>{sources.map((source) => <div className="source-row" key={String(source.id)}><span className="source-icon"><Building2 size={15} /></span><div><strong>{String(source.name)}</strong><span>{String(source.description)}</span></div><StatusBadge status={String(source.status)} /><button className="icon-button subtle" onClick={() => onVerify(String(source.name))} title="Check connector"><RefreshCw size={14} /></button></div>)}</section><section className="panel span-5"><div className="section-heading"><div><div className="eyebrow">WORKSPACE SECURITY</div><h2>Officer preferences</h2></div></div><div className="settings-item"><div><strong>Require review for contradictions</strong><span>Conflicting values never auto-resolve.</span></div><span className="toggle-on" /></div><div className="settings-item"><div><strong>Private signed document links</strong><span>Links expire after ten minutes.</span></div><span className="toggle-on" /></div><div className="settings-item"><div><strong>OCR confidence threshold</strong><span>Documents below confidence remain reviewable.</span></div><b className="text-blue">80%</b></div><div className="settings-item"><div><strong>Authentication</strong><span>Supabase email/password with session refresh.</span></div><StatusBadge status="Connected" /></div></section></div></>; }
-
-function computeDossierDigest(check: Record<string, unknown>): string {
-  const seed = `${check.id || ""}:${check.tenderId || ""}:${check.bidderId || ""}:${check.requirement || ""}:${check.rule || ""}:${check.source || ""}:SHA256`;
-  let hash1 = 0x55aa55aa, hash2 = 0x12345678;
-  for (let i = 0; i < seed.length; i++) {
-    const ch = seed.charCodeAt(i);
-    hash1 = Math.imul(hash1 ^ ch, 2654435761);
-    hash2 = Math.imul(hash2 ^ ch, 1597334677);
-  }
-  hash1 = Math.imul(hash1 ^ (hash1 >>> 16), 2246822507) ^ Math.imul(hash2 ^ (hash2 >>> 13), 3266489909);
-  hash2 = Math.imul(hash2 ^ (hash2 >>> 16), 2246822507) ^ Math.imul(hash1 ^ (hash1 >>> 13), 3266489909);
-  const h1 = (hash1 >>> 0).toString(16).padStart(8, "0");
-  const h2 = (hash2 >>> 0).toString(16).padStart(8, "0");
-  return `${h1}d9a7${h2}8b1e4c3a${(h1 + h2).split("").reverse().join("")}${(h2 + h1).slice(2, 10)}${h1}8f4a9b2c`.slice(0, 64);
-}
 
 function ProveItModal({
   check,
@@ -168,193 +155,144 @@ function ProveItModal({
   onOpenDocument: (check: Record<string, unknown>) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const digest = computeDossierDigest(check);
-
-  const handleCopy = () => {
-    void navigator.clipboard.writeText(digest);
-    setCopied(true);
-    toast.success("Cryptographic SHA-256 seal copied to clipboard.");
-    setTimeout(() => setCopied(false), 2500);
-  };
-
   const tenderTitle = String(check.tenderTitle || "Procurement Event");
   const bidderName = String(check.bidderName || "Bidder Enterprise");
   const requirement = String(check.requirement || "Statutory Requirement");
-  const rule = String(check.rule || "General Financial Rules (GFR) 2017 · Rule 144(xi)");
-  const documentName = String(check.document || check.evidence || "Submitted Certificate");
-  const pageNumber = String(check.page || "1");
-  const extractedClaim = String(check.extracted || check.claim || "Valid certificate issued");
-  const relevantEvidence = String(check.relevantEvidence || check.detail || `Extracted claim verified from page ${pageNumber}`);
-  const sourceName = String(check.source || "Government Central Registry");
-  const resultStatus = String(check.result || "Verified");
-  const confidence = String(check.evidenceConfidence || check.confidence || "High");
-  const verificationTime = String(check.checked || new Date().toLocaleString("en-IN"));
+  const rule = String(check.rule || "No explicit rule recorded");
+  const claim = String(check.claim || check.evidence || "No bidder claim recorded");
+  const resultStatus = String(check.result || "Pending Verification");
+  const detail = String(check.detail || "No verification explanation was recorded.");
+  const digest = String(check.sha256Hash || "SHA-256 fingerprint unavailable");
+  const evidenceRecords = Array.isArray(check.evidenceRecords) && check.evidenceRecords.length
+    ? check.evidenceRecords as Array<Record<string, unknown>>
+    : [{
+      documentId: check.documentId,
+      source: check.source,
+      document: check.document || check.evidence,
+      page: check.page,
+      extracted: check.extracted,
+      evidence: check.relevantEvidence,
+      sourceStatus: check.sourceStatus,
+      confidence: check.evidenceConfidence || check.confidence,
+    }];
+  const isPending = resultStatus.toLowerCase().includes("pending");
+  const isReview = resultStatus.toLowerCase().includes("review");
 
-  const registryResponse = {
-    gateway: sourceName,
-    status: resultStatus === "Verified" ? "VALID_ACTIVE" : resultStatus === "Needs Review" ? "CONTRADICTION_FLAGGED" : "PENDING_CONFIRMATION",
-    verification_token: `GOV-VRF-${digest.slice(0, 10).toUpperCase()}`,
-    match_score: confidence === "High" ? "99.8%" : "84.2%",
-    statutory_standing: resultStatus === "Verified" ? "CLEAR_COMPLIANT" : "FLAGGED_FOR_OFFICER",
-    timestamp: verificationTime,
+  const handleCopy = async () => {
+    if (digest === "SHA-256 fingerprint unavailable") return;
+    try {
+      await navigator.clipboard.writeText(digest);
+      setCopied(true);
+      toast.success("Evidence snapshot fingerprint copied.");
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      toast.error("Clipboard access is unavailable in this browser.");
+    }
   };
 
   return (
     <div className="prove-it-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="prove-it-modal" role="dialog" aria-modal="true">
+      <div className="prove-it-modal" role="dialog" aria-modal="true" aria-labelledby="prove-it-title">
         <div className="prove-it-header">
           <div className="prove-it-title-wrap">
-            <div className="prove-it-kicker">
-              <span className="kicker-dot" />
-              PROVE IT · 3-PILLAR COMPLIANCE DOSSIER
-            </div>
-            <h2>{requirement}</h2>
+            <div className="prove-it-kicker"><span className="kicker-dot" /> PROVE IT · EVIDENCE TRACE</div>
+            <h2 id="prove-it-title">Why this result?</h2>
             <div className="prove-it-meta-chips">
               <span className="meta-chip">Tender: <strong>{tenderTitle}</strong></span>
               <span className="meta-chip">Bidder: <strong>{bidderName}</strong></span>
-              <span className="meta-chip">Rule: <strong>{rule}</strong></span>
+              <span className="meta-chip">Record: <strong>{check.isDemo ? "Demo / Sample" : "Workspace"}</strong></span>
               <StatusBadge status={resultStatus} />
             </div>
           </div>
-          <button className="icon-button subtle" onClick={onClose} aria-label="Close dossier">
-            <X size={18} />
-          </button>
+          <button className="icon-button subtle" onClick={onClose} aria-label="Close dossier"><X size={18} /></button>
         </div>
 
         <div className="prove-it-body">
-          <div className="prove-it-pillars">
-            {/* Pillar 1: Statutory Requirement */}
-            <div className="prove-it-pillar">
-              <div className="pillar-top">
-                <span className="pillar-number">1</span>
-                <strong>STATUTORY REQUIREMENT</strong>
-              </div>
-              <div className="pillar-content">
-                <div className="pillar-line">
-                  <span>LEGAL / PROCUREMENT RULE</span>
-                  <strong>{rule}</strong>
-                </div>
-                <div className="pillar-line">
-                  <span>MANDATORY CRITERIA</span>
-                  <strong>{requirement}</strong>
-                </div>
-                <div className="pillar-quote">
-                  {String(check.detail || "Statutory compliance mandate: Bidder must supply certified proof satisfying Indian Public Procurement guidelines and department eligibility thresholds.")}
-                </div>
-                <div className="pillar-line">
-                  <span>AUTHORIZED VERIFIER GATEWAY</span>
-                  <strong>{sourceName}</strong>
-                </div>
-              </div>
-            </div>
+          {check.isDemo === true && <div className="prove-it-demo-note"><BadgeCheck size={15} /><span><strong>FICTIONAL SIH 2026 SAMPLE</strong> · Government source rows are sandbox fixtures, not live lookups or official records.</span></div>}
 
-            {/* Pillar 2: Bidder Document Evidence */}
-            <div className="prove-it-pillar">
-              <div className="pillar-top">
-                <span className="pillar-number">2</span>
-                <strong>BIDDER VAULT EVIDENCE</strong>
-              </div>
-              <div className="pillar-content">
-                <div className="pillar-line">
-                  <span>SUBMITTED VAULT DOCUMENT</span>
-                  <strong>{documentName}</strong>
-                </div>
-                <div className="pillar-line">
-                  <span>EXTRACTED CLAIM (OCR / NLP)</span>
-                  <strong>{extractedClaim}</strong>
-                </div>
-                <div className="pillar-quote">
-                  {relevantEvidence}
-                </div>
-                <div className="pillar-line">
-                  <span>AUDIT TRACE</span>
-                  <strong>Page {pageNumber} · {confidence} Confidence · Zero-Trust Stored</strong>
-                </div>
-                <div className="pillar-action">
-                  <button
-                    type="button"
-                    className="button button-secondary button-small full-width"
-                    onClick={() => onOpenDocument(check)}
-                  >
-                    <ExternalLink size={13} /> View Secure Vault File
-                  </button>
-                </div>
-              </div>
-            </div>
+          <div className="prove-it-chain">
+            <section className="prove-it-chain-step">
+              <div className="prove-it-step-heading"><span>01</span><strong>REQUIREMENT</strong></div>
+              <h3>{requirement}</h3>
+              <div className="prove-it-fact"><span>TENDER</span><strong>{tenderTitle}</strong></div>
+              {typeof check.evidenceRequired === "string" && <div className="prove-it-fact"><span>REQUIRED SUBMISSION</span><strong>{check.evidenceRequired}</strong></div>}
+            </section>
+            <div className="prove-it-chain-arrow" aria-hidden="true">↓</div>
 
-            {/* Pillar 3: Central Registry Gateway */}
-            <div className="prove-it-pillar">
-              <div className="pillar-top">
-                <span className="pillar-number">3</span>
-                <strong>CENTRAL REGISTRY GATEWAY</strong>
+            <section className="prove-it-chain-step">
+              <div className="prove-it-step-heading"><span>02</span><strong>BIDDER CLAIM</strong></div>
+              <div className="prove-it-claim">“{claim}”</div>
+              <div className="prove-it-fact"><span>BIDDER</span><strong>{bidderName}</strong></div>
+            </section>
+            <div className="prove-it-chain-arrow" aria-hidden="true">↓</div>
+
+            <section className="prove-it-chain-step">
+              <div className="prove-it-step-heading"><span>03</span><strong>SOURCE DOCUMENTS & RECORDS</strong></div>
+              <div className="prove-it-evidence-list">
+                {evidenceRecords.map((record, index) => {
+                  const documentId = record.documentId;
+                  const source = String(record.source || "Source not recorded");
+                  const document = String(record.document || record.documentName || "Source record");
+                  const page = String(record.page || "—");
+                  const extracted = String(record.extracted || record.extractedValue || "No extracted value recorded");
+                  const excerpt = String(record.evidence || record.relevantEvidence || "No supporting excerpt recorded.");
+                  const sourceStatus = String(record.sourceStatus || "Source status not recorded");
+                  return (
+                    <article className="prove-it-evidence-item" key={String(record.id || `${source}-${document}-${index}`)}>
+                      <div className="prove-it-evidence-top"><span>Evidence {index + 1}</span><StatusBadge status={sourceStatus} /></div>
+                      <div className="prove-it-fact"><span>SOURCE</span><strong>{source}</strong></div>
+                      <div className="prove-it-fact"><span>DOCUMENT / SOURCE RECORD</span><strong>{document}</strong></div>
+                      <div className="prove-it-fact"><span>PAGE / RECORD LOCATION</span><strong>{page}</strong></div>
+                      <div className="prove-it-fact"><span>EXTRACTED VALUE</span><strong>{extracted}</strong></div>
+                      <blockquote className="prove-it-excerpt">{excerpt}</blockquote>
+                      {typeof documentId === "string" && documentId && documentId !== "—" && (
+                        <button type="button" className="button button-secondary button-small" onClick={() => onOpenDocument({ ...check, documentId, document, page, extracted, relevantEvidence: excerpt, source })}>
+                          <ExternalLink size={13} /> View source document
+                        </button>
+                      )}
+                    </article>
+                  );
+                })}
               </div>
-              <div className="pillar-content">
-                <div className="pillar-line">
-                  <span>OFFICIAL SOURCE</span>
-                  <strong>{sourceName}</strong>
-                </div>
-                <div className="pillar-line">
-                  <span>GATEWAY RESPONSE STATUS</span>
-                  <strong className={resultStatus === "Verified" ? "text-green" : "text-orange"}>
-                    ● {resultStatus === "Verified" ? "Verified Active by Central Portal" : "Flagged: Review Required"}
-                  </strong>
-                </div>
-                <div className="pillar-quote registry-active">
-                  {JSON.stringify(registryResponse, null, 2)}
-                </div>
-                <div className="pillar-line">
-                  <span>VERIFICATION TIMESTAMP</span>
-                  <strong>{verificationTime} IST</strong>
-                </div>
-              </div>
-            </div>
+            </section>
+            <div className="prove-it-chain-arrow" aria-hidden="true">↓</div>
+
+            <section className="prove-it-chain-step">
+              <div className="prove-it-step-heading"><span>04</span><strong>RULE APPLIED</strong></div>
+              <div className="prove-it-rule">{rule}</div>
+            </section>
+            <div className="prove-it-chain-arrow" aria-hidden="true">↓</div>
+
+            <section className={`prove-it-result ${isPending ? "prove-it-result-pending" : isReview ? "prove-it-result-review" : "prove-it-result-verified"}`}>
+              <div className="prove-it-step-heading"><span>05</span><strong>VERIFICATION RESULT</strong></div>
+              <div className="prove-it-result-heading"><StatusBadge status={resultStatus} /><span>{String(check.confidence || "Low")} confidence</span></div>
+              <p>{detail}</p>
+              {isPending && <div className="prove-it-outcome-note">The source did not respond. This is not a finding of non-compliance; the bidder remains pending until evidence can be checked.</div>}
+              {isReview && <div className="prove-it-outcome-note">Conflicting or incomplete evidence is preserved for the officer. VerifAI does not resolve the discrepancy automatically.</div>}
+            </section>
           </div>
 
-          {/* Cryptographic Tamper-Proof Seal */}
           <div className="crypto-seal-panel">
             <div className="crypto-seal-header">
-              <div className="crypto-seal-title">
-                <ShieldCheck size={16} />
-                CRYPTOGRAPHIC PROOF OF INTEGRITY (TAMPER-EVIDENT SEAL)
-              </div>
-              <span className="secure-pill">
-                <BadgeCheck size={12} /> SHA-256 SEAL VALIDATED
-              </span>
+              <div className="crypto-seal-title"><ShieldCheck size={16} /> EVIDENCE SNAPSHOT FINGERPRINT</div>
+              <span className="secure-pill"><BadgeCheck size={12} /> SHA-256 CONTENT HASH</span>
             </div>
             <div className="crypto-hash-row">
               <code>{digest}</code>
-              <button
-                type="button"
-                className="button button-quiet button-small"
-                onClick={handleCopy}
-              >
-                {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copied" : "Copy Hash"}
+              <button type="button" className="button button-quiet button-small" onClick={handleCopy}>
+                {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copied" : "Copy hash"}
               </button>
             </div>
             <div className="crypto-seal-footer">
-              <span>Standard: SHA-256 / HMAC-Ed25519 · Immutable Workspace Evidence Seal</span>
-              <span>Verification Audit ID: {String(check.id || "0000").slice(0, 16)}</span>
+              <span>Fingerprint of the stored requirement, claim, rule, and evidence shown above; not a signature or externally anchored seal.</span>
+              <span>Record ID: {String(check.id || "—").slice(0, 16)}</span>
             </div>
           </div>
         </div>
 
         <div className="prove-it-actions">
-          <button
-            type="button"
-            className="button button-secondary"
-            onClick={() => window.print()}
-          >
-            <Printer size={14} /> Print Dossier
-          </button>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button
-              type="button"
-              className="button button-primary"
-              onClick={onClose}
-            >
-              Close Dossier
-            </button>
-          </div>
+          <button type="button" className="button button-secondary" onClick={() => window.print()}><Printer size={14} /> Print Dossier</button>
+          <button type="button" className="button button-primary" onClick={onClose}>Close Dossier</button>
         </div>
       </div>
     </div>
